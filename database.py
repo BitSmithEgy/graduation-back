@@ -5,17 +5,16 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DB_ENGIN = os.getenv("DB_ENGIN")
-DB_USERNAME = os.getenv("DB_USERNAME")
-DB_PASSWORD = os.getenv("DB_PASSWORD")
-DB_HOST = os.getenv("DB_HOST")
-DB_PORT = os.getenv("DB_PORT")
-DB_NAME = os.getenv("DB_NAME")
+DATABASE_URL = os.getenv("DATABASE_URL_DEVELOPMENT")
 
-DATABASE_URL = f"{DB_ENGIN}://{DB_USERNAME}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+connect_args = {}
+if DATABASE_URL.startswith("sqlite"):
+    connect_args = {"check_same_thread": False}
 
-
-engine = create_engine(DATABASE_URL,)
+engine = create_engine(
+    DATABASE_URL,
+    connect_args=connect_args
+)
 
 SessionLocal = sessionmaker(
     autocommit=False,
@@ -24,6 +23,11 @@ SessionLocal = sessionmaker(
 )
 
 Base = declarative_base()
+
+
+def init_db():
+    from models import User
+    Base.metadata.create_all(bind=engine)
 
 
 def get_db():
