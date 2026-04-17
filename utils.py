@@ -52,7 +52,13 @@ def decode_token(token: str) -> dict:
 
 
 async def get_current_user(request: Request, db: Session = Depends(get_db)) -> models.User:
-    token = request.cookies.get("access_token")
+    token_from_header = request.headers.get("Authorization")
+    if token_from_header and token_from_header.startswith("Bearer "):
+        print("Token found in header")
+        token = token_from_header[7:]
+    else:
+        print("Token not found in header, checking cookies")
+        token = request.cookies.get("access_token")
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 

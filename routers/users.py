@@ -36,7 +36,7 @@ def login(user: UserLogin, response: Response, db: Session = Depends(get_db)):
         expires_delta=timedelta(minutes=30)
     )
     response.set_cookie(key="access_token", value=token, httponly=True, samesite="lax")
-    return {"message": "Login successful"}
+    return {"message": "Login successful", "access_token": token}
 
 
 @router.post("/logout")
