@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import users
+from routers import users, analysis, xray
 import database
 
 database.init_db()
@@ -19,6 +19,8 @@ def root():
     return {"message": "Welcome to the Graduation Project API!"}
 
 app.include_router(users.router)
+app.include_router(analysis.router)
+app.include_router(xray.router)
 
 if __name__ == "__main__":
     import uvicorn
