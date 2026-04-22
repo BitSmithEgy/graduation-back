@@ -158,6 +158,32 @@ Sets `deleted_at` timestamp. User is excluded from all listings but data is pres
 
 ---
 
+## Analysis Endpoint
+### `POST /analysis/run`
+```json
+{
+  "pregnancies": 6,
+  "glucose": 148.0,
+  "blood_pressure": 72.0,
+  "skin_thickness": 35.0,
+  "insulin": 125.0,
+  "bmi": 33.6,
+  "diabetes_pedigree_function": 0.627,
+  "age": 50
+}
+```
+
+## X-Ray Endpoint
+### `POST /xray/upload`
+
+**Request:** `multipart/form-data`
+
+| Field | Type   | Required | Description        |
+|-------|--------|----------|--------------------|
+| file  | binary | ✅       | X-ray image file   |
+
+**Accepted formats:** `.jpg`, `.jpeg`, `.png`
+
 ## Role-Based Access Summary
 
 | Feature | `user` | `clinic` | `admin` |
