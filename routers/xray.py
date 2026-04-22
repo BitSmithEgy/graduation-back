@@ -30,4 +30,4 @@ async def upload_xray(
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
     
-    return {"diagnosis": predicted_disease, "confidence": confidence_score}
+    return {"diagnosis": predicted_disease, "confidence": str(confidence_score)}
