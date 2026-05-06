@@ -1,6 +1,10 @@
+import sys
+sys.dont_write_bytecode = True
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers import users, analysis, xray
+import os
+import importlib
 import database
 
 database.init_db()
@@ -18,9 +22,13 @@ app.add_middleware(
 def root():
     return {"message": "Welcome to the Graduation Project API!"}
 
-app.include_router(users.router)
-app.include_router(analysis.router)
-app.include_router(xray.router)
+ROUTERS_DIR = os.path.join(os.path.dirname(__file__), "routers")
+for filename in os.listdir(ROUTERS_DIR):
+    if filename.endswith(".py") and not filename.startswith("__"):
+        module_name = filename[:-3]
+        module = importlib.import_module(f"routers.{module_name}")
+        if hasattr(module, "router"):
+            app.include_router(module.router)
 
 if __name__ == "__main__":
     import uvicorn

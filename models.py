@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Boolean, Date, TIMESTAMP, Enum, ForeignKey, INTEGER, Float
+from sqlalchemy import Column, String, Boolean, Date, TIMESTAMP, Time, Enum, ForeignKey, INTEGER, Float
 from sqlalchemy.orm import relationship
 from database import Base
 from sqlalchemy.sql import func
@@ -48,7 +48,8 @@ class User(Base):
 
     profile     = relationship("UserProfile", back_populates="user", uselist=False)
     clinic      = relationship("Clinic",      back_populates="user", uselist=False)
-
+    bookings    = relationship("Booking",     back_populates="user", uselist=True)  
+    
 class UserProfile(Base):
     __tablename__ = "user_profiles"
 
@@ -89,6 +90,9 @@ class Clinic(Base):
     deleted_at = Column(TIMESTAMP, nullable=True)
 
     user = relationship("User", back_populates="clinic")
+    doctor = relationship("Doctors", back_populates="clinic")
+    slots = relationship("AppointmentSlot", back_populates="clinic")
+    bookings = relationship("Booking", back_populates="clinic")
 
 class Diagnotics(Base):
     __tablename__ = "diagnostics"
@@ -117,3 +121,119 @@ class DiagnoticsResults(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
 
     diagnostic = relationship("Diagnotics", back_populates="result")
+
+class Specializations(Base):
+    __tablename__ = "specializations"
+    id = Column(String(36), primary_key=True, unique=True, nullable=False, default=lambda: str(uuid.uuid4()))
+    name_en = Column(String(100), nullable=False)
+    name_ar = Column(String(100), nullable=False)
+    description_en = Column(String(255), nullable=True)
+    description_ar = Column(String(255), nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+    deleted_at = Column(TIMESTAMP, nullable=True)
+
+    doctor = relationship("Doctors", back_populates="specialization")
+
+class LanguageSpoken(enum.Enum):
+    en = "en"
+    ar = "ar"
+
+class Doctors(Base):
+    __tablename__ = "doctors"
+    id = Column(String(36), primary_key=True, unique=True, nullable=False, default=lambda: str(uuid.uuid4()))
+    clinic_id = Column(String(36), ForeignKey("clinics.id"), nullable=True)
+    specialization_id = Column(String(36), ForeignKey("specializations.id"), nullable=False)
+    language_spoken = Column(Enum(LanguageSpoken, name="language_spoken_enum"), nullable=True)
+    
+    full_name = Column(String(255), nullable=False)
+
+    bio_en = Column(String(1000), nullable=True)
+    bio_ar = Column(String(1000), nullable=True)
+    consultation_price_egp = Column(Float, nullable=True)
+    years_of_experiance = Column(INTEGER, nullable=True)
+    license_number = Column(String(255), nullable=True)
+    
+    is_verified = Column(Boolean, default=False)
+    avg_rating = Column(Float, default=0.0)
+    rating_count = Column(INTEGER, default=0)
+    is_active = Column(Boolean, default=True)
+    
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+    deleted_at = Column(TIMESTAMP, nullable=True)
+
+    clinic = relationship("Clinic", back_populates="doctor")
+    specialization = relationship("Specializations", back_populates="doctor")
+    availability = relationship("DoctorAvailability", back_populates="doctor")
+    
+class DoctorAvailability(Base):
+    __tablename__ = "doctor_availability"
+    id = Column(String(36), primary_key=True, unique=True, nullable=False, default=lambda: str(uuid.uuid4()))
+    doctor_id = Column(String(36), ForeignKey("doctors.id"), nullable=False)
+    day_of_week = Column(INTEGER, nullable=False)
+    start_time = Column(Time, nullable=False)
+    end_time = Column(Time, nullable=False)
+    slot_duration_minutes = Column(INTEGER, nullable=False)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+
+    doctor = relationship("Doctors", back_populates="availability")
+    slots  = relationship("AppointmentSlot", back_populates="availability")  
+
+class SlotStatusEnum(enum.Enum):
+    available = "available"
+    blocked = "blocked"
+    cancelled = "cancelled"
+    booked = "booked"
+
+class AppointmentSlot(Base):
+    __tablename__ = "appointment_slots"
+    id = Column(String(36), primary_key=True, unique=True, nullable=False, default=lambda: str(uuid.uuid4()))
+    clinic_id = Column(String(36), ForeignKey("clinics.id"), nullable=False)
+    availability_id = Column(String(36), ForeignKey("doctor_availability.id"), nullable=False)
+    slot_date = Column(Date, nullable=False)
+    slot_start_time = Column(Time, nullable=False)
+    slot_end_time = Column(Time, nullable=False)
+    slot_status = Column(Enum(SlotStatusEnum, name="slot_status_enum"), nullable=False)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+    deleted_at = Column(TIMESTAMP, nullable=True)
+
+    clinic = relationship("Clinic", back_populates="slots")
+    availability = relationship("DoctorAvailability", back_populates="slots")
+    bookings = relationship("Booking", back_populates="slot")
+    
+class BookingStatusEnum(enum.Enum):
+    pending = "pending"
+    confirmed = "confirmed"
+    cancelled = "cancelled"
+    completed = "completed"
+
+class Booking(Base):
+    __tablename__ = "bookings"
+    id = Column(String(36), primary_key=True, unique=True, nullable=False, default=lambda: str(uuid.uuid4()))
+    clinic_id = Column(String(36), ForeignKey("clinics.id"), nullable=False)
+    user_id = Column(String(36), ForeignKey("users.uuid"), nullable=False)
+    slot_id = Column(String(36), ForeignKey("appointment_slots.id"), nullable=False)
+    booking_status = Column(Enum(BookingStatusEnum, name="booking_status_enum"), nullable=False)
+    cancellation_reason = Column(String(255), nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+    deleted_at = Column(TIMESTAMP, nullable=True)
+
+    clinic = relationship("Clinic", back_populates="bookings")
+    user = relationship("User", back_populates="bookings")
+    slot = relationship("AppointmentSlot", back_populates="bookings")
+    notes = relationship("AppointmentNotes", back_populates="booking", uselist=False)
+
+class AppointmentNotes(Base):
+    __tablename__ = "appointment_notes"
+    id = Column(String(36), primary_key=True, unique=True, nullable=False, default=lambda: str(uuid.uuid4()))
+    booking_id = Column(String(36), ForeignKey("bookings.id"), nullable=False)
+    notes = Column(String(1000), nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+
+    booking = relationship("Booking", back_populates="notes")

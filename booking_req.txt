@@ -1,0 +1,274 @@
+# Booking System — Implementation Spec
+## Groups 3 → 10 (after Specializations & Doctors)
+
+> **Code style contract** — match the existing `users.py` router exactly:
+> - SQLAlchemy `Session` via `Depends(get_db)`
+> - Auth via `Depends(get_current_user)` / `Depends(require_admin)`
+> - Soft-delete by setting `deleted_at = datetime.utcnow()`
+> - Pydantic v2 (`model_validate`, `model_dump(exclude_unset=True)`)
+> - HTTP 201 on create, 200 on delete with `{"message": "..."}` body
+> - All IDs are UUID strings (not int)
+
+---
+
+## New helper dependencies to add in `utils.py`
+
+```python
+# Add these 3 dependency functions alongside get_current_user / require_admin
+
+def require_doctor(current_user: User = Depends(get_current_user)) -> User:
+    """Allow only users with role == 'doctor'."""
+    if current_user.role != RoleEnum.doctor:
+        raise HTTPException(status_code=403, detail="Doctor access required")
+    return current_user
+
+def require_clinic(current_user: User = Depends(get_current_user)) -> User:
+    """Allow only users with role == 'clinic'."""
+    if current_user.role != RoleEnum.clinic:
+        raise HTTPException(status_code=403, detail="Clinic access required")
+    return current_user
+
+def require_doctor_or_admin(current_user: User = Depends(get_current_user)) -> User:
+    if current_user.role not in (RoleEnum.doctor, RoleEnum.admin):
+        raise HTTPException(status_code=403, detail="Doctor or admin access required")
+    return current_user
+```
+
+---
+
+## Group 3 — Doctor Availability
+**File:** `routers/availability.py`
+**Prefix:** `/doctors/{doctor_id}/availability`
+**Tag:** `availability`
+
+### Schema: `schemas/availability.py`
+
+```python
+# ── INPUT ──────────────────────────────────────────────────────────
+class AvailabilityCreate(BaseModel):
+    day_of_week: int              # 0=Monday … 6=Sunday  (validate: 0 <= x <= 6)
+    start_time: time
+    end_time: time                # must be > start_time
+    slot_duration_minutes: int = 30   # validate: must be > 0
+
+class AvailabilityUpdate(BaseModel):
+    day_of_week: Optional[int] = None
+    start_time: Optional[time] = None
+    end_time: Optional[time] = None
+    slot_duration_minutes: Optional[int] = None
+    is_active: Optional[bool] = None
+
+# ── OUTPUT ─────────────────────────────────────────────────────────
+class AvailabilityOut(BaseModel):
+    availability_id: str
+    doctor_id: str
+    day_of_week: int
+    start_time: time
+    end_time: time
+    slot_duration_minutes: int
+    is_active: bool
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+```
+
+### Endpoints
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/doctors/{doctor_id}/availability` | public | List all availability rules for a doctor. Filter by `?is_active=true`. Return list of `AvailabilityOut`. |
+| POST | `/doctors/{doctor_id}/availability` | doctor / admin | Create one rule. Validate: `end_time > start_time`. Check doctor exists and is not deleted. Return 201 + `AvailabilityOut`. |
+| PATCH | `/doctors/{doctor_id}/availability/{avail_id}` | doctor / admin | Partial update using `model_dump(exclude_unset=True)`. If doctor role, verify `doctor.user_id == current_user.uuid` before allowing edit. |
+| DELETE | `/doctors/{doctor_id}/availability/{avail_id}` | doctor / admin | Hard delete (no soft-delete needed — no FK dependents). Return `{"message": "Availability rule deleted"}`. |
+
+### Business rules
+- A doctor must exist (`deleted_at IS NULL`) before adding availability.
+- If the caller is a `doctor` role, their `doctor.user_id` must equal `current_user.uuid` — they can only manage their own schedule.
+- No duplicate `(doctor_id, day_of_week, start_time)` — raise 400 "Rule already exists for this day/time".
+
+---
+
+## Group 4 — Appointment Slots
+**File:** `routers/slots.py`
+**Prefix:** `/appointment-slots`
+**Tag:** `slots`
+
+### Schema: `schemas/slots.py`
+
+```python
+# ── INPUT ──────────────────────────────────────────────────────────
+class SlotCreate(BaseModel):
+    availability_id: str          # FK → doctor_availability
+    slot_date: date
+    slot_start_time: time
+    slot_end_time: time
+    notes: Optional[str] = None
+
+class SlotGenerateRequest(BaseModel):
+    doctor_id: str
+    from_date: date
+    to_date: date                 # validate: to_date >= from_date, max range 90 days
+
+class SlotStatusUpdate(BaseModel):
+    slot_status: SlotStatusEnum   # available | blocked | cancelled
+    notes: Optional[str] = None
+
+# ── OUTPUT ─────────────────────────────────────────────────────────
+class SlotOut(BaseModel):
+    slot_id: str
+    availability_id: Optional[str]
+    clinic_id: Optional[str]
+    slot_date: date
+    slot_start_time: time
+    slot_end_time: time
+    slot_status: SlotStatusEnum
+    notes: Optional[str]
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+```
+
+### Endpoints
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/appointment-slots/` | public | List slots. **Required query param:** `doctor_id`. Optional: `from_date`, `to_date`, `slot_status` (default filter to `available`). |
+| GET | `/appointment-slots/{slot_id}` | auth | Single slot detail. |
+| POST | `/appointment-slots/generate` | doctor / admin | **Bulk generation** — see business rules below. Returns `{"generated": N, "skipped": M}`. |
+| POST | `/appointment-slots/` | doctor / admin | Create a single slot manually. |
+| PATCH | `/appointment-slots/{slot_id}` | doctor / admin | Update status or notes. Cannot change a `booked` slot to `available` (raise 409). |
+| DELETE | `/appointment-slots/{slot_id}` | admin | Hard delete — only if `slot_status != 'booked'`, else raise 400 "Cannot delete a booked slot". |
+
+### Business rules for `/generate`
+```
+1. Load all DoctorAvailability rules for `doctor_id` where `is_active = True`.
+2. For each date in [from_date .. to_date]:
+   a. Find rules where rule.day_of_week == date.weekday()
+   b. For each matching rule, generate slots:
+        current = rule.start_time
+        while current + duration <= rule.end_time:
+            check if slot already exists (doctor via availability_id + slot_date + start_time)
+            if not → INSERT new AppointmentSlot (status=available)
+            else   → count as skipped
+            current += timedelta(minutes=rule.slot_duration_minutes)
+3. Commit once at the end, return counts.
+```
+
+---
+
+## Group 5 — Bookings  ← core group
+**File:** `routers/bookings.py`
+**Prefix:** `/bookings`
+**Tag:** `bookings`
+
+### Schema: `schemas/bookings.py`
+
+```python
+# ── INPUT ──────────────────────────────────────────────────────────
+class BookingCreate(BaseModel):
+    slot_id: str
+    notes: Optional[str] = None
+    booking_language: str = "ar"
+    payment_preference: PaymentPreferenceEnum = PaymentPreferenceEnum.cash
+    booking_source_id: Optional[str] = None   # FK → booking_source
+
+class BookingReschedule(BaseModel):
+    new_slot_id: str
+
+class BookingStatusUpdate(BaseModel):          # internal, admin/doctor use
+    slot_status: BookingStatusEnum
+    notes: Optional[str] = None
+
+# ── OUTPUT ─────────────────────────────────────────────────────────
+class SlotMiniOut(BaseModel):                  # embedded in BookingOut
+    slot_id: str
+    slot_date: date
+    slot_start_time: time
+    slot_end_time: time
+    model_config = ConfigDict(from_attributes=True)
+
+class DoctorMiniOut(BaseModel):
+    doctor_id: str
+    title: Optional[str]
+    # pull name from doctor.user relationship
+    full_name: Optional[str]
+    model_config = ConfigDict(from_attributes=True)
+
+class BookingOut(BaseModel):
+    booking_id: str
+    slot: SlotMiniOut
+    user_id: str
+    doctor: DoctorMiniOut
+    clinic_id: Optional[str]
+    booking_date: date
+    visit_start_time: Optional[time]
+    slot_status: BookingStatusEnum
+    notes: Optional[str]
+    booking_language: str
+    payment_preference: PaymentPreferenceEnum
+    rating: Optional[int]
+    booked_at: datetime
+    cancelled_at: Optional[datetime]
+    invoice: Optional["InvoiceOut"] = None     # forward ref, include on detail GET
+
+    model_config = ConfigDict(from_attributes=True)
+```
+
+### Endpoints
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/bookings/` | user | Create booking — see atomic flow below. |
+| GET | `/bookings/me` | user | My bookings. Query params: `status`, `from_date`, `to_date`, `doctor_id`. |
+| GET | `/bookings/doctor/me` | doctor | Doctor's own bookings. Query: `status`, `from_date`, `to_date`. |
+| GET | `/bookings/{booking_id}` | owner / doctor / admin | Full detail including `invoice`. |
+| PATCH | `/bookings/{booking_id}/confirm` | doctor / clinic / admin | Set `slot_status = confirmed`. Only from `pending`. |
+| PATCH | `/bookings/{booking_id}/complete` | doctor / admin | Set `slot_status = completed`. Only from `confirmed`. |
+| PATCH | `/bookings/{booking_id}/cancel` | user / admin | Cancel — see cancellation flow. |
+| PATCH | `/bookings/{booking_id}/reschedule` | user / admin | Swap slot — see reschedule flow. |
+| GET | `/bookings/` | admin | All bookings. Query: `user_id`, `doctor_id`, `clinic_id`, `status`, `from_date`, `to_date`. |
+
+### Atomic create flow (`POST /bookings/`)
+```
+1. Load slot by slot_id — raise 404 if missing.
+2. Check slot.slot_status == 'available' — raise 409 "Slot is not available" if not.
+3. Check user has no other booking for the same doctor on the same date — raise 409 "User already has a booking for this doctor on that date".
+4. Begin a database transaction.
+5. Create a new `Booking` record with status `pending`, linking `slot_id`, `user_id`, and capture `booking_language`, `payment_preference`, `booking_source_id` if provided. Set `booking_date` to current date, `booked_at` to `datetime.utcnow()`.
+6. Update the associated `AppointmentSlot` status to `booked` and set `slot_status` accordingly.
+7. Commit the transaction.
+8. Return a `BookingOut` response with HTTP 201.
+
+### Cancellation Flow (`PATCH /bookings/{booking_id}/cancel`)
+1. Load booking by `booking_id` — raise 404 if missing.
+2. Verify the requester is the booking owner, the assigned doctor, or an admin.
+3. Allow cancellation only if current `slot_status` is not `completed`.
+4. Set `slot_status` back to `available` (or `cancelled` for slot depending on policy).
+5. Update `Booking` status to `cancelled`, set `cancelled_at` to `datetime.utcnow()`.
+6. If a payment was made, trigger refund logic (placeholder for payment gateway integration).
+7. Commit and return `{ "message": "Booking cancelled" }`.
+
+### Reschedule Flow (`PATCH /bookings/{booking_id}/reschedule`)
+1. Load booking and validate requester as in cancellation.
+2. Validate new `slot_id` exists and is `available`.
+3. Mark old slot status back to `available` (or `blocked` based on business rules).
+4. Update booking's `slot_id` to the new slot, set `slot_status` of new slot to `booked`.
+5. Adjust timestamps if needed, commit transaction.
+6. Return updated `BookingOut`.
+
+### Rating & Feedback (`PATCH /bookings/{booking_id}/rate`)
+- Endpoint (optional) to submit a rating (1‑5) and optional textual feedback after completion.
+- Allowed only when booking `slot_status` is `completed`.
+- Store `rating` in the `Booking` record.
+
+### Invoice Generation (`GET /bookings/{booking_id}/invoice`)
+- Returns an `InvoiceOut` schema (defined elsewhere) with payment details, tax, and a downloadable PDF URL.
+- Accessible to owner, doctor, and admin.
+
+### General Notes
+- All endpoints return JSON with consistent `message` fields on success.
+- Use Pydantic `model_validate` for input validation and `model_dump(exclude_unset=True)` for partial updates.
+- Ensure proper transaction handling to maintain consistency between bookings and slot statuses.
+- All IDs are UUID strings; timestamps are UTC.
+- Soft‑delete pattern applies to Users and Doctors; hard‑delete for slots only when not `booked`.
+- Errors return appropriate HTTP status codes: 400 for validation, 401/403 for auth, 404 for not found, 409 for conflicts.
