@@ -1,0 +1,89 @@
+{
+  "record_id": "",  // from medical_record table 
+  "generated_at": "",  // from medical_record table
+  
+
+  "patient": {
+    "name": "",  // from users table
+    "date_of_birth": "", // from users table
+    "gender": "",  // from users table
+    "phone" : ""  // from users table 
+  },
+  
+  "medical_alerts": {
+    "allergies": [""], // from user_profile table 
+    "chronic_diseases": [""]  //from user_profile table
+  },
+  
+  "glucose": 
+        "bmi": 
+        "blood_pressure": {
+          "systolic": ,
+  "diagnostics": [
+    {
+      "name": "", // from diagnostics table 
+      "date": "", // from diagnostics table 
+      "key_readings": {
+        "glucose": {  // from diagnostics table 
+          "value": 0,
+          "unit": "mg/dL"
+        },
+        "bmi": {  // from diagnostics table 
+          "value": 0,
+          "unit": "kg/m²"
+        },
+        "blood_pressure": { // from diagnostics table 
+            "value": 0,
+            "unit": "mmHg"
+          }
+        }
+      },
+      "result": { // from diagnostics_result  table  take confidence_score and risk level
+        "confidence_score": "",
+        "risk_level": ""
+      } 
+    }
+  ],
+  
+  "radiology": [
+    {
+      "body_part": "", // from radiology table 
+      "date": "", // from radiology table 
+      "findings": [  // from radiology_finding  table  take name of radiology and severity and confidence score 
+        {
+          "name": "",
+          "severity": "",
+          "confidence_score": ""
+        }
+        ]
+    }
+  ],
+  
+  "chat_consultations": [
+    {
+      "date": "", // from chat_session table
+      "symptoms": [{"name": "",
+          "confidence_score": ""}], // from symptom_tag table take symptom_name_en and confidence score
+      "recommendation": "" // from chat_session table
+    }
+  ],
+  
+  "visits": [
+    {
+      "date": "",  // from booking table take booked_at
+      "clinic": {
+        "name": "", //from clinic table
+        "address": ""  //from clinic table
+      },
+      "doctor": "", // from doctors table take full_name
+      "specialty": "", // from specialties table take specialties_name_en
+      "status": "",  // from booking table take booking_status
+      "notes": [""], // from appointment_note table take note_text
+      "rating": { // from rating table take rating score
+        "value": "",
+        "scale": "1-5"
+      }  
+    }
+  ]
+}
+

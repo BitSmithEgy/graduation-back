@@ -5,16 +5,15 @@ from typing import List, Optional
 from datetime import date, datetime
 
 from database import get_db
-from models import User, Doctors, DoctorAvailability, AppointmentSlot, Booking, SlotStatusEnum, BookingStatusEnum, RoleEnum
+from models import User, Doctor, DoctorAvailability, AppointmentSlot, Booking, SlotStatusEnum, BookingStatusEnum, RoleEnum
 from schemas import BookingCreate, BookingReschedule, BookingStatusUpdate, BookingOut
 from utils import require_role, get_current_user
 
 router = APIRouter(prefix="/bookings", tags=["bookings"])
 
 def enrich_booking_for_output(booking: Booking) -> BookingOut:
-    """Helper to attach the doctor object since it's not a direct relationship in Booking model."""
-    if booking.slot and booking.slot.availability:
-        setattr(booking, "doctor", booking.slot.availability.doctor)
+    """Helper to ensure the booking object is ready for validation."""
+    # The relationships in models.py should handle most of this now.
     return BookingOut.model_validate(booking)
 
 
@@ -36,12 +35,14 @@ def create_booking(
     if slot.slot_status != SlotStatusEnum.available:
         raise HTTPException(status_code=409, detail="Slot is not available")
         
-    doctor_id = slot.availability.doctor_id
+    doctor_id = slot.doctor_id
     
-    existing_booking = db.query(Booking).join(AppointmentSlot).join(DoctorAvailability).filter(
+    # Check if user already has a pending/confirmed booking for this doctor on this day
+    existing_booking = db.query(Booking).join(AppointmentSlot).filter(
         Booking.user_id == current_user.uuid,
-        DoctorAvailability.doctor_id == doctor_id,
-        Booking.booking_status.in_([BookingStatusEnum.pending.name, BookingStatusEnum.confirmed.name]),
+        Booking.doctor_id == doctor_id,
+        AppointmentSlot.slot_date == slot.slot_date,
+        Booking.booking_status.in_([BookingStatusEnum.pending, BookingStatusEnum.confirmed]),
         Booking.deleted_at == None
     ).first()
     
@@ -51,11 +52,13 @@ def create_booking(
     new_booking = Booking(
         slot_id=slot.id,
         user_id=current_user.uuid,
+        doctor_id=doctor_id,
         clinic_id=slot.clinic_id,
-        booking_status=BookingStatusEnum.pending.name
+        booking_status=BookingStatusEnum.pending,
+        booking_source_id=payload.booking_source_id
     )
     
-    slot.slot_status = SlotStatusEnum.booked.name
+    slot.slot_status = SlotStatusEnum.booked
     
     db.add(new_booking)
     db.commit()
@@ -66,7 +69,7 @@ def create_booking(
 
 @router.get("/me", response_model=List[BookingOut])
 def get_my_bookings(
-    booking_status: Optional[str] = None,
+    booking_status: Optional[BookingStatusEnum] = None,
     from_date: Optional[date] = None,
     to_date: Optional[date] = None,
     doctor_id: Optional[str] = None,
@@ -82,11 +85,11 @@ def get_my_bookings(
     if booking_status:
         query = query.filter(Booking.booking_status == booking_status)
     if from_date:
-        query = query.filter(Booking.booking_date >= from_date)
+        query = query.join(AppointmentSlot).filter(AppointmentSlot.slot_date >= from_date)
     if to_date:
-        query = query.filter(Booking.booking_date <= to_date)
+        query = query.join(AppointmentSlot).filter(AppointmentSlot.slot_date <= to_date)
     if doctor_id:
-        query = query.join(AppointmentSlot).join(DoctorAvailability).filter(DoctorAvailability.doctor_id == doctor_id)
+        query = query.filter(Booking.doctor_id == doctor_id)
         
     bookings = query.all()
     return [enrich_booking_for_output(b) for b in bookings]
@@ -95,29 +98,32 @@ def get_my_bookings(
 @router.get("/doctor/me", response_model=List[BookingOut])
 def get_doctor_bookings(
     doctor_id: Optional[str] = None,
-    booking_status: Optional[str] = None,
+    booking_status: Optional[BookingStatusEnum] = None,
     from_date: Optional[date] = None,
     to_date: Optional[date] = None,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_role("clinic"))
+    current_user: User = Depends(require_role("clinic", "doctor"))
 ):
-    """Get doctor's bookings (accessed by Clinic)."""
-    if not current_user.clinic:
-        raise HTTPException(status_code=403, detail="Clinic not found")
-        
-    query = db.query(Booking).filter(
-        Booking.clinic_id == current_user.clinic.id,
-        Booking.deleted_at == None
-    )
+    """Get bookings for a clinic or doctor."""
+    query = db.query(Booking).filter(Booking.deleted_at == None)
     
+    if current_user.role == RoleEnum.clinic:
+        if not current_user.clinic_account:
+            raise HTTPException(status_code=403, detail="Clinic not found")
+        query = query.filter(Booking.clinic_id == current_user.clinic_account.id)
+    elif current_user.role == RoleEnum.doctor:
+        if not current_user.doctor_account:
+            raise HTTPException(status_code=403, detail="Doctor account not found")
+        query = query.filter(Booking.doctor_id == current_user.doctor_account.id)
+        
     if doctor_id:
-        query = query.join(AppointmentSlot).join(DoctorAvailability).filter(DoctorAvailability.doctor_id == doctor_id)
+        query = query.filter(Booking.doctor_id == doctor_id)
     if booking_status:
         query = query.filter(Booking.booking_status == booking_status)
     if from_date:
-        query = query.filter(Booking.booking_date >= from_date)
+        query = query.join(AppointmentSlot).filter(AppointmentSlot.slot_date >= from_date)
     if to_date:
-        query = query.filter(Booking.booking_date <= to_date)
+        query = query.join(AppointmentSlot).filter(AppointmentSlot.slot_date <= to_date)
         
     bookings = query.all()
     return [enrich_booking_for_output(b) for b in bookings]
@@ -128,7 +134,7 @@ def get_all_bookings(
     user_id: Optional[str] = None,
     doctor_id: Optional[str] = None,
     clinic_id: Optional[str] = None,
-    booking_status: Optional[str] = None,
+    booking_status: Optional[BookingStatusEnum] = None,
     from_date: Optional[date] = None,
     to_date: Optional[date] = None,
     db: Session = Depends(get_db),
@@ -141,14 +147,14 @@ def get_all_bookings(
         query = query.filter(Booking.user_id == user_id)
     if clinic_id:
         query = query.filter(Booking.clinic_id == clinic_id)
+    if doctor_id:
+        query = query.filter(Booking.doctor_id == doctor_id)
     if booking_status:
         query = query.filter(Booking.booking_status == booking_status)
     if from_date:
-        query = query.filter(Booking.booking_date >= from_date)
+        query = query.join(AppointmentSlot).filter(AppointmentSlot.slot_date >= from_date)
     if to_date:
-        query = query.filter(Booking.booking_date <= to_date)
-    if doctor_id:
-        query = query.join(AppointmentSlot).join(DoctorAvailability).filter(DoctorAvailability.doctor_id == doctor_id)
+        query = query.join(AppointmentSlot).filter(AppointmentSlot.slot_date <= to_date)
         
     bookings = query.all()
     return [enrich_booking_for_output(b) for b in bookings]
@@ -167,7 +173,9 @@ def get_booking(
         
     if current_user.role == RoleEnum.user and booking.user_id != current_user.uuid:
         raise HTTPException(status_code=403, detail="Not authorized")
-    if current_user.role == RoleEnum.clinic and (not current_user.clinic or booking.clinic_id != current_user.clinic.id):
+    if current_user.role == RoleEnum.clinic and (not current_user.clinic_account or booking.clinic_id != current_user.clinic_account.id):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if current_user.role == RoleEnum.doctor and (not current_user.doctor_account or booking.doctor_id != current_user.doctor_account.id):
         raise HTTPException(status_code=403, detail="Not authorized")
         
     return enrich_booking_for_output(booking)
@@ -177,20 +185,22 @@ def get_booking(
 def confirm_booking(
     booking_id: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_role("clinic", "admin"))
+    current_user: User = Depends(require_role("clinic", "doctor", "admin"))
 ):
     """Confirm a booking. Only from pending."""
     booking = db.query(Booking).filter(Booking.id == booking_id, Booking.deleted_at == None).first()
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
         
-    if current_user.role.value == "clinic" and booking.clinic_id != current_user.clinic.id:
+    if current_user.role == RoleEnum.clinic and booking.clinic_id != current_user.clinic_account.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if current_user.role == RoleEnum.doctor and booking.doctor_id != current_user.doctor_account.id:
         raise HTTPException(status_code=403, detail="Not authorized")
         
-    if booking.booking_status != BookingStatusEnum.pending.name:
+    if booking.booking_status != BookingStatusEnum.pending:
         raise HTTPException(status_code=400, detail="Only pending bookings can be confirmed")
         
-    booking.booking_status = BookingStatusEnum.confirmed.name
+    booking.booking_status = BookingStatusEnum.confirmed
     db.commit()
     db.refresh(booking)
     return enrich_booking_for_output(booking)
@@ -200,24 +210,22 @@ def confirm_booking(
 def complete_booking(
     booking_id: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_role("clinic", "admin"))
+    current_user: User = Depends(require_role("clinic", "doctor", "admin"))
 ):
     """Complete a booking. Only from confirmed."""
     booking = db.query(Booking).filter(Booking.id == booking_id, Booking.deleted_at == None).first()
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
         
-    if current_user.role.value == "clinic" and booking.clinic_id != current_user.clinic.id:
+    if current_user.role == RoleEnum.clinic and booking.clinic_id != current_user.clinic_account.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if current_user.role == RoleEnum.doctor and booking.doctor_id != current_user.doctor_account.id:
         raise HTTPException(status_code=403, detail="Not authorized")
         
-    if booking.booking_status != BookingStatusEnum.confirmed.name:
+    if booking.booking_status != BookingStatusEnum.confirmed:
         raise HTTPException(status_code=400, detail="Only confirmed bookings can be completed")
         
-    booking.booking_status = BookingStatusEnum.completed.name
-    
-    if booking.slot:
-        pass
-        
+    booking.booking_status = BookingStatusEnum.completed
     db.commit()
     db.refresh(booking)
     return enrich_booking_for_output(booking)
@@ -236,17 +244,18 @@ def cancel_booking(
         
     if current_user.role == RoleEnum.user and booking.user_id != current_user.uuid:
         raise HTTPException(status_code=403, detail="Not authorized")
-    if current_user.role == RoleEnum.clinic and booking.clinic_id != current_user.clinic.id:
+    if current_user.role == RoleEnum.clinic and booking.clinic_id != current_user.clinic_account.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if current_user.role == RoleEnum.doctor and booking.doctor_id != current_user.doctor_account.id:
         raise HTTPException(status_code=403, detail="Not authorized")
         
-    if booking.booking_status == BookingStatusEnum.completed.name:
+    if booking.booking_status == BookingStatusEnum.completed:
         raise HTTPException(status_code=400, detail="Cannot cancel a completed booking")
         
-    booking.booking_status = BookingStatusEnum.cancelled.name
-    booking.cancelled_at = func.now()
+    booking.booking_status = BookingStatusEnum.cancelled
     
     if booking.slot:
-        booking.slot.slot_status = SlotStatusEnum.available.name
+        booking.slot.slot_status = SlotStatusEnum.available
         
     db.commit()
     return {"message": "Booking cancelled"}
@@ -266,10 +275,12 @@ def reschedule_booking(
         
     if current_user.role == RoleEnum.user and booking.user_id != current_user.uuid:
         raise HTTPException(status_code=403, detail="Not authorized")
-    if current_user.role == RoleEnum.clinic and booking.clinic_id != current_user.clinic.id:
+    if current_user.role == RoleEnum.clinic and booking.clinic_id != current_user.clinic_account.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if current_user.role == RoleEnum.doctor and booking.doctor_id != current_user.doctor_account.id:
         raise HTTPException(status_code=403, detail="Not authorized")
         
-    if booking.booking_status not in [BookingStatusEnum.pending.name, BookingStatusEnum.confirmed.name]:
+    if booking.booking_status not in [BookingStatusEnum.pending, BookingStatusEnum.confirmed]:
         raise HTTPException(status_code=400, detail="Cannot reschedule completed or cancelled booking")
         
     new_slot = db.query(AppointmentSlot).filter(
@@ -279,18 +290,16 @@ def reschedule_booking(
     
     if not new_slot:
         raise HTTPException(status_code=404, detail="New slot not found")
-    if new_slot.slot_status != SlotStatusEnum.available.name:
+    if new_slot.slot_status != SlotStatusEnum.available:
         raise HTTPException(status_code=409, detail="New slot is not available")
         
     old_slot = booking.slot
     if old_slot:
-        old_slot.slot_status = SlotStatusEnum.available.name
+        old_slot.slot_status = SlotStatusEnum.available
         
-    new_slot.slot_status = SlotStatusEnum.booked.name
+    new_slot.slot_status = SlotStatusEnum.booked
     
     booking.slot_id = new_slot.id
-    booking.booking_date = new_slot.slot_date
-    booking.visit_start_time = new_slot.slot_start_time
     
     db.commit()
     db.refresh(booking)
@@ -312,20 +321,27 @@ def rate_booking(
     if booking.user_id != current_user.uuid:
         raise HTTPException(status_code=403, detail="Only the patient can rate the booking")
         
-    if booking.booking_status != BookingStatusEnum.completed.name:
+    if booking.booking_status != BookingStatusEnum.completed:
         raise HTTPException(status_code=400, detail="Can only rate completed bookings")
         
-    booking.rating = rating
+    # In the new model, we use DoctorRating model
+    from models import DoctorRating
+    new_rating = DoctorRating(
+        booking_id=booking.id,
+        doctor_id=booking.doctor_id,
+        rating_score=rating
+    )
+    db.add(new_rating)
     
-    doctor = booking.slot.availability.doctor
+    doctor = booking.doctor
     if doctor:
         if doctor.rating_count is None:
             doctor.rating_count = 0
-            doctor.avg_rating = 0.0
+            doctor.average_rating = 0.0
             
-        total_rating = doctor.avg_rating * doctor.rating_count
+        total_rating = doctor.average_rating * doctor.rating_count
         doctor.rating_count += 1
-        doctor.avg_rating = (total_rating + rating) / doctor.rating_count
+        doctor.average_rating = (total_rating + rating) / doctor.rating_count
         
     db.commit()
     return {"message": "Rating submitted successfully"}
@@ -343,10 +359,11 @@ def get_invoice(
         raise HTTPException(status_code=404, detail="Booking not found")
         
     return {
-        "invoice_id": "INV-12345",
+        "invoice_id": f"INV-{booking.id[:8]}",
         "booking_id": booking.id,
         "amount": 500.0,
         "tax": 50.0,
         "total": 550.0,
-        "pdf_url": f"https://api.example.com/invoices/INV-12345.pdf"
+        "pdf_url": f"https://api.example.com/invoices/INV-{booking.id[:8]}.pdf"
     }
+

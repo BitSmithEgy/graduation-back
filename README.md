@@ -268,3 +268,108 @@ Sets `deleted_at` timestamp. User is excluded from all listings but data is pres
 | `401` | Invalid credentials |
 | `403` | Account deactivated / deleted / wrong role for endpoint |
 | `404` | User / profile / clinic not found |
+
+---
+
+## Doctors Management
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| `GET` | `/doctors/` | Public | List all active doctors |
+| `GET` | `/doctors/{id}` | Public | Get specific doctor details |
+| `POST` | `/doctors/` | `clinic` | Add a new doctor to your clinic |
+| `PUT` | `/doctors/{id}` | `clinic`/`admin` | Update doctor information |
+| `DELETE` | `/doctors/{id}` | `clinic`/`admin` | Soft delete a doctor |
+
+### `POST /doctors/`
+```json
+{
+  "full_name": "Dr. Sarah Smith",
+  "specialization_id": "uuid-specialization",
+  "language_spoken": "English, Arabic",
+  "bio_en": "Expert in Cardiology...",
+  "bio_ar": "خبير في أمراض القلب...",
+  "consultation_price_egp": 500,
+  "years_of_experiance": 10,
+  "license_number": "LIC123456",
+  "is_active": true
+}
+```
+
+---
+
+## Availability & Slots
+
+Managing a doctor's schedule involves two steps: defining **Availability Rules** and generating **Appointment Slots**.
+
+### 1. Availability Rules
+Define the recurring weekly schedule for a doctor.
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| `GET` | `/doctors/{id}/availability/` | Public | List doctor's availability rules |
+| `POST` | `/doctors/{id}/availability/` | `clinic`/`admin` | Create a recurring schedule rule |
+
+**Example Rule:** Mondays from 09:00 to 17:00 with 30-minute slots.
+```json
+{
+  "day_of_week": 0,
+  "start_time": "09:00:00",
+  "end_time": "17:00:00",
+  "slot_duration_minutes": 30
+}
+```
+
+### 2. Appointment Slots
+Slots are the actual bookable time units. They can be generated in bulk based on availability rules.
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| `GET` | `/appointment-slots/` | Public | List available slots (filter by `doctor_id`) |
+| `POST` | `/appointment-slots/generate` | `clinic`/`admin` | Bulk generate slots for a date range |
+
+**Generate Slots Request:**
+```json
+{
+  "doctor_id": "uuid-doctor",
+  "from_date": "2024-05-20",
+  "to_date": "2024-05-27"
+}
+```
+
+---
+
+## Booking Flow
+
+The booking process follows a state-machine logic to ensure data integrity.
+
+### Step 1: Find a Slot
+The patient searches for available slots for a specific doctor.
+`GET /appointment-slots/?doctor_id={id}&slot_status=available`
+
+### Step 2: Create Booking
+The patient selects a `slot_id` and creates a booking. The slot status automatically changes to `booked`.
+`POST /bookings/`
+```json
+{
+  "slot_id": "uuid-slot"
+}
+```
+*Note: The booking starts in `pending` status.*
+
+### Step 3: Confirmation (Clinic)
+The clinic reviews and confirms the booking.
+`PATCH /bookings/{id}/confirm`
+
+### Step 4: Completion or Cancellation
+After the visit, the clinic marks it as complete. Alternatively, either party can cancel.
+- **Complete:** `PATCH /bookings/{id}/complete`
+- **Cancel:** `PATCH /bookings/{id}/cancel` (Releases the slot back to `available`)
+
+### Step 5: Post-Booking Actions
+- **Rate Doctor:** `PATCH /bookings/{id}/rate?rating=5` (Only for `completed` bookings)
+- **Get Invoice:** `GET /bookings/{id}/invoice`
+
+### Booking Status Summary
+`pending` ➔ `confirmed` ➔ `completed` | `cancelled`
+

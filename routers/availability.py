@@ -5,7 +5,7 @@ from typing import List, Optional
 import datetime
 
 from database import get_db
-from models import User, Doctors, DoctorAvailability
+from models import User, Doctor, DoctorAvailability
 from schemas import AvailabilityCreate, AvailabilityUpdate, AvailabilityOut
 from utils import require_role, get_current_user
 
@@ -19,8 +19,7 @@ def list_availability(
 ):
     """List all availability rules for a doctor."""
     query = db.query(DoctorAvailability).filter(
-        DoctorAvailability.doctor_id == doctor_id,
-        DoctorAvailability.deleted_at == None
+        DoctorAvailability.doctor_id == doctor_id
     )
     if is_active is not None:
         query = query.filter(DoctorAvailability.is_active == is_active)
@@ -32,19 +31,20 @@ def create_availability(
     doctor_id: str,
     availability_in: AvailabilityCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_role("clinic", "admin"))
+    current_user: User = Depends(require_role("clinic", "admin", "doctor"))
 ):
-    """Create an availability rule for a doctor."""
-    if availability_in.end_time <= availability_in.start_time:
-        raise HTTPException(status_code=400, detail="end_time must be greater than start_time")
-    
-    doctor = db.query(Doctors).filter(Doctors.id == doctor_id, Doctors.deleted_at == None).first()
+    doctor = db.query(Doctor).filter(Doctor.id == doctor_id, Doctor.deleted_at == None).first()
     if not doctor:
         raise HTTPException(status_code=404, detail="Doctor not found")
+    print("current_user.uuid",current_user.uuid)
+    print("doctor.user_id",doctor.user_id)
+    if current_user.role.value == "doctor" and current_user.uuid != doctor.user_id:
+        raise HTTPException(status_code=403, detail="You are not authorized to create availability rule for this doctor")
+    if availability_in.end_time <= availability_in.start_time:
+        raise HTTPException(status_code=400, detail="end_time must be greater than start_time")
         
-    if current_user.role.value == "clinic":
-        if not current_user.clinic or doctor.clinic_id != current_user.clinic.id:
-            raise HTTPException(status_code=403, detail="Not authorized to manage this doctor's availability")
+    # Check if this clinic is allowed to manage this doctor's availability
+    # (Removed doctor.clinic_id check as it's many-to-many now)
 
     duplicate = db.query(DoctorAvailability).filter(
         DoctorAvailability.doctor_id == doctor_id,
@@ -75,18 +75,12 @@ def update_availability(
     """Update an availability rule."""
     rule = db.query(DoctorAvailability).filter(
         DoctorAvailability.id == avail_id,
-        DoctorAvailability.doctor_id == doctor_id,
-        DoctorAvailability.deleted_at == None
+        DoctorAvailability.doctor_id == doctor_id
     ).first()
     
     if not rule:
         raise HTTPException(status_code=404, detail="Availability rule not found")
         
-    doctor = db.query(Doctors).filter(Doctors.id == doctor_id).first()
-    if current_user.role.value == "clinic":
-        if not current_user.clinic or doctor.clinic_id != current_user.clinic.id:
-            raise HTTPException(status_code=403, detail="Not authorized to manage this doctor's availability")
-
     update_data = availability_in.model_dump(exclude_unset=True)
     if "start_time" in update_data or "end_time" in update_data:
         st = update_data.get("start_time", rule.start_time)
@@ -111,18 +105,13 @@ def delete_availability(
     """Delete an availability rule."""
     rule = db.query(DoctorAvailability).filter(
         DoctorAvailability.id == avail_id,
-        DoctorAvailability.doctor_id == doctor_id,
-        DoctorAvailability.deleted_at == None
+        DoctorAvailability.doctor_id == doctor_id
     ).first()
     
     if not rule:
         raise HTTPException(status_code=404, detail="Availability rule not found")
         
-    doctor = db.query(Doctors).filter(Doctors.id == doctor_id).first()
-    if current_user.role.value == "clinic":
-        if not current_user.clinic or doctor.clinic_id != current_user.clinic.id:
-            raise HTTPException(status_code=403, detail="Not authorized to manage this doctor's availability")
-
-    rule.deleted_at = func.now()
+    db.delete(rule) # Availability rules can be hard deleted or we can add deleted_at to DoctorAvailability model
     db.commit()
     return {"message": "Availability rule deleted"}
+

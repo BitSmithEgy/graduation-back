@@ -1,12 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, Response, Request
 from sqlalchemy.orm import Session
 from database import get_db
-from models import User, UserProfile, Clinic, RoleEnum
+from models import User, UserProfile, Clinic, Doctor, RoleEnum, Role, UserRole
 from schemas import (
-    UserRegister, ClinicRegister,
-    UserWithProfileOut, UserWithClinicOut,
+    UserRegister, ClinicRegister, DoctorRegister,
+    UserWithProfileOut, UserWithClinicOut, UserWithDoctorOut,
     UserUpdate, UserProfileCreate, UserProfileUpdate, UserProfileOut,
     ClinicCreate, ClinicUpdate, ClinicOut,
+    DoctorCreate, DoctorUpdate, DoctorOut,
     UserOut, UserLogin, TokenOut
 )
 from utils import hash_password, verify_password, create_access_token, get_current_user, require_admin
@@ -17,10 +18,12 @@ router = APIRouter(prefix="/users", tags=["users"])
 
 
 
-def _build_user_out(user: User) -> Union[UserWithProfileOut, UserWithClinicOut]:
+def _build_user_out(user: User) -> Union[UserWithProfileOut, UserWithClinicOut, UserWithDoctorOut]:
     """Return the right enriched schema based on the user's role."""
     if user.role == RoleEnum.clinic:
         return UserWithClinicOut.model_validate(user)
+    if user.role == RoleEnum.doctor:
+        return UserWithDoctorOut.model_validate(user)
     return UserWithProfileOut.model_validate(user)
 
 
@@ -42,6 +45,11 @@ def register_user(payload: UserRegister, db: Session = Depends(get_db)):
 
     profile_data = payload.profile.model_dump() if payload.profile else {}
     db.add(UserProfile(user_id=user.uuid, **profile_data))
+
+    # Assign role in RBAC
+    user_role = db.query(Role).filter(Role.role_name_en == "user").first()
+    if user_role:
+        db.add(UserRole(user_id=user.uuid, role_id=user_role.role_id))
 
     db.commit()
     db.refresh(user)
@@ -65,9 +73,53 @@ def register_clinic(payload: ClinicRegister, db: Session = Depends(get_db)):
 
     db.add(Clinic(user_id=user.uuid, **payload.clinic.model_dump()))
 
+    # Assign role in RBAC
+    clinic_role = db.query(Role).filter(Role.role_name_en == "clinic").first()
+    if clinic_role:
+        db.add(UserRole(user_id=user.uuid, role_id=clinic_role.role_id))
+
     db.commit()
     db.refresh(user)
     return UserWithClinicOut.model_validate(user)
+
+
+@router.post("/register/doctor", response_model=UserWithDoctorOut, status_code=201)
+def register_doctor(payload: DoctorRegister, db: Session = Depends(get_db)):
+    if db.query(User).filter(User.email == payload.email).first():
+        raise HTTPException(status_code=400, detail="Email already registered")
+    if db.query(User).filter(User.phone == payload.phone).first():
+        raise HTTPException(status_code=400, detail="Phone already registered")
+
+    user_data = payload.model_dump(exclude={"password", "specialization_id", "language_spoken", "bio_en", "bio_ar", "consultation_price_egp", "years_of_experience", "license_number"})
+    user = User(
+        **user_data,
+        password_hash=hash_password(payload.password),
+        role=RoleEnum.doctor,
+    )
+    db.add(user)
+    db.flush()
+
+    doctor = Doctor(
+        user_id=user.uuid,
+        full_name=payload.full_name,
+        specialization_id=payload.specialization_id,
+        language_spoken=payload.language_spoken,
+        bio_en=payload.bio_en,
+        bio_ar=payload.bio_ar,
+        consultation_price_egp=payload.consultation_price_egp,
+        years_of_experience=payload.years_of_experience,
+        license_number=payload.license_number
+    )
+    db.add(doctor)
+
+    # Assign role in RBAC
+    doctor_role = db.query(Role).filter(Role.role_name_en == "doctor").first()
+    if doctor_role:
+        db.add(UserRole(user_id=user.uuid, role_id=doctor_role.role_id))
+
+    db.commit()
+    db.refresh(user)
+    return UserWithDoctorOut.model_validate(user)
 
 
 
