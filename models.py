@@ -418,10 +418,11 @@ class DoctorAvailability(Base):
 
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+    deleted_at = Column(TIMESTAMP, nullable=True)
 
     doctor = relationship("Doctor", back_populates="availability")
     clinic = relationship("Clinic")
-    slots  = relationship("AppointmentSlot", back_populates="availability")
+    slots  = relationship("AppointmentSlot", back_populates="availability", cascade="all, delete-orphan")
 
 
 # ─────────────────────────────────────────────
@@ -501,7 +502,7 @@ class Booking(Base):
     clinic         = relationship("Clinic",        back_populates="bookings")
     slot           = relationship("AppointmentSlot", back_populates="bookings")
     booking_source = relationship("BookingSource", back_populates="bookings")
-    notes          = relationship("AppointmentNotes", back_populates="booking", uselist=False)
+    appointment_notes = relationship("AppointmentNotes", back_populates="booking", uselist=False)
     roles          = relationship("AppointmentRole",  back_populates="booking")
     ratings        = relationship("DoctorRating",     back_populates="booking")
 
@@ -519,7 +520,7 @@ class AppointmentNotes(Base):
     created_at = Column(TIMESTAMP,  server_default=func.now())
     updated_at = Column(TIMESTAMP,  server_default=func.now(), onupdate=func.now())
 
-    booking = relationship("Booking", back_populates="notes")
+    booking = relationship("Booking", back_populates="appointment_notes")
 
 
 # ─────────────────────────────────────────────

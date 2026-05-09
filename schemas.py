@@ -424,6 +424,7 @@ class DoctorOut(DoctorBase):
     updated_at:     Optional[datetime] = None
     deleted_at:     Optional[datetime] = None
     specialization: Optional[SpecializationOut] = None
+    doctor_clinics: List["DoctorClinicOut"] = []
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -613,6 +614,8 @@ class BookingOut(BaseModel):
     doctor:              DoctorMiniOut
     clinic:              Optional[ClinicMiniOut] = None
     booking_status:      BookingStatusEnum
+    patient_name:        Optional[str]         = None
+    notes:               Optional[str]         = None
     payment_reference:   Optional[str]         = None
     payment_status:      Optional[str]         = None
     cancellation_reason: Optional[str]         = None
@@ -734,6 +737,7 @@ class DiabetesRequest(BaseModel):
     bmi:                        float
     diabetes_pedigree_function: float
     age:                        int
+    gender:                     Optional[str]   = None
 
 
 class DiagnosticResultOut(BaseModel):

@@ -5,7 +5,7 @@ from typing import List, Optional
 import datetime
 
 from database import get_db
-from models import User, Doctor, DoctorAvailability
+from models import User, Doctor, DoctorAvailability, SlotStatusEnum
 from schemas import AvailabilityCreate, AvailabilityUpdate, AvailabilityOut
 from utils import require_role, get_current_user
 
@@ -19,7 +19,8 @@ def list_availability(
 ):
     """List all availability rules for a doctor."""
     query = db.query(DoctorAvailability).filter(
-        DoctorAvailability.doctor_id == doctor_id
+        DoctorAvailability.doctor_id == doctor_id,
+        DoctorAvailability.deleted_at == None
     )
     if is_active is not None:
         query = query.filter(DoctorAvailability.is_active == is_active)
@@ -50,6 +51,7 @@ def create_availability(
         DoctorAvailability.doctor_id == doctor_id,
         DoctorAvailability.day_of_week == availability_in.day_of_week,
         DoctorAvailability.start_time == availability_in.start_time,
+        DoctorAvailability.deleted_at == None
     ).first()
     
     if duplicate:
@@ -75,7 +77,8 @@ def update_availability(
     """Update an availability rule."""
     rule = db.query(DoctorAvailability).filter(
         DoctorAvailability.id == avail_id,
-        DoctorAvailability.doctor_id == doctor_id
+        DoctorAvailability.doctor_id == doctor_id,
+        DoctorAvailability.deleted_at == None
     ).first()
     
     if not rule:
@@ -100,7 +103,7 @@ def delete_availability(
     doctor_id: str,
     avail_id: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_role("clinic", "admin"))
+    current_user: User = Depends(require_role("clinic", "admin", "doctor"))
 ):
     """Delete an availability rule."""
     rule = db.query(DoctorAvailability).filter(
@@ -111,7 +114,7 @@ def delete_availability(
     if not rule:
         raise HTTPException(status_code=404, detail="Availability rule not found")
         
-    db.delete(rule) # Availability rules can be hard deleted or we can add deleted_at to DoctorAvailability model
+    db.delete(rule) 
     db.commit()
     return {"message": "Availability rule deleted"}
 

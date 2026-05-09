@@ -75,6 +75,7 @@ def generate_slots(
     rules = db.query(DoctorAvailability).filter(
         DoctorAvailability.doctor_id == payload.doctor_id,
         DoctorAvailability.is_active == True,
+        DoctorAvailability.deleted_at == None
     )
     if payload.clinic_id:
         rules = rules.filter(DoctorAvailability.clinic_id == payload.clinic_id)
@@ -106,6 +107,7 @@ def generate_slots(
                     AppointmentSlot.doctor_id == payload.doctor_id,
                     AppointmentSlot.slot_date == current_date,
                     AppointmentSlot.slot_start_time == slot_start,
+                    AppointmentSlot.deleted_at == None
                 ).first()
                 
                 if not exists:
@@ -142,7 +144,10 @@ def create_slot(
     current_user: User = Depends(require_role("clinic", "admin"))
 ):
     """Create a single slot manually."""
-    rule = db.query(DoctorAvailability).filter(DoctorAvailability.id == slot_in.availability_id).first()
+    rule = db.query(DoctorAvailability).filter(
+        DoctorAvailability.id == slot_in.availability_id,
+        DoctorAvailability.deleted_at == None
+    ).first()
     if not rule:
         raise HTTPException(status_code=404, detail="Availability rule not found")
             
@@ -199,7 +204,7 @@ def update_slot(
 def delete_slot(
     slot_id: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_role("admin"))
+    current_user: User = Depends(require_role("admin", "clinic", "doctor"))
 ):
     """Hard delete slot."""
     slot = db.query(AppointmentSlot).filter(AppointmentSlot.id == slot_id).first()

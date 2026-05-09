@@ -12,7 +12,7 @@ def _build_patient_section(user: User, profile: UserProfile | None) -> dict:
     return {
         "name": user.full_name,
         "date_of_birth": str(profile.date_of_birth) if profile and profile.date_of_birth else None,
-        "gender": profile.gender if profile else None,
+        "gender": profile.gender.value if profile and profile.gender else None,  # ✅
         "phone": user.phone,
     }
 

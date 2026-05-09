@@ -121,6 +121,33 @@ def register_doctor(payload: DoctorRegister, db: Session = Depends(get_db)):
     db.refresh(user)
     return UserWithDoctorOut.model_validate(user)
 
+@router.get("/me/doctor", response_model=DoctorOut)
+def get_my_doctor(current_user: User = Depends(get_current_user)):
+    if current_user.role != RoleEnum.doctor:
+        raise HTTPException(status_code=403, detail="Only doctor accounts have doctor details")
+    if not current_user.doctor_account:
+        raise HTTPException(status_code=404, detail="Doctor profile not found")
+    return current_user.doctor_account
+
+
+@router.patch("/me/doctor", response_model=DoctorOut)
+def update_my_doctor(
+    data: DoctorUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.role != RoleEnum.doctor:
+        raise HTTPException(status_code=403, detail="Only doctor accounts can update doctor details")
+    if not current_user.doctor_account:
+        raise HTTPException(status_code=404, detail="Doctor profile not found")
+
+    for key, value in data.model_dump(exclude_unset=True).items():
+        setattr(current_user.doctor_account, key, value)
+
+    db.commit()
+    db.refresh(current_user.doctor_account)
+    return current_user.doctor_account
+
 
 
 @router.post("/login", response_model=TokenOut)
@@ -228,17 +255,13 @@ def update_my_profile(
     db.refresh(current_user.profile)
     return current_user.profile
 
-
-
 @router.get("/me/clinic", response_model=ClinicOut)
 def get_my_clinic(current_user: User = Depends(get_current_user)):
     if current_user.role != RoleEnum.clinic:
         raise HTTPException(status_code=403, detail="Only clinic accounts have clinic details")
-    if not current_user.clinic:
+    if not current_user.clinic_account:
         raise HTTPException(status_code=404, detail="Clinic not found")
-    return current_user.clinic
-
-
+    return current_user.clinic_account
 @router.patch("/me/clinic", response_model=ClinicOut)
 def update_my_clinic(
     data: ClinicUpdate,
@@ -247,15 +270,16 @@ def update_my_clinic(
 ):
     if current_user.role != RoleEnum.clinic:
         raise HTTPException(status_code=403, detail="Only clinic accounts can update clinic details")
-    if not current_user.clinic:
+    if not current_user.clinic_account:
         raise HTTPException(status_code=404, detail="Clinic not found")
 
     for key, value in data.model_dump(exclude_unset=True).items():
-        setattr(current_user.clinic, key, value)
+        setattr(current_user.clinic_account, key, value)
 
     db.commit()
-    db.refresh(current_user.clinic)
-    return current_user.clinic
+    db.refresh(current_user.clinic_account)
+    return current_user.clinic_account
+
 
 
 

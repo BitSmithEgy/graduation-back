@@ -5,7 +5,7 @@ from typing import List, Optional
 from datetime import date, datetime
 
 from database import get_db
-from models import User, Doctor, DoctorAvailability, AppointmentSlot, Booking, SlotStatusEnum, BookingStatusEnum, RoleEnum
+from models import User, Doctor, DoctorAvailability, AppointmentSlot, Booking, SlotStatusEnum, BookingStatusEnum, RoleEnum, AppointmentNotes
 from schemas import BookingCreate, BookingReschedule, BookingStatusUpdate, BookingOut
 from utils import require_role, get_current_user
 
@@ -13,8 +13,11 @@ router = APIRouter(prefix="/bookings", tags=["bookings"])
 
 def enrich_booking_for_output(booking: Booking) -> BookingOut:
     """Helper to ensure the booking object is ready for validation."""
-    # The relationships in models.py should handle most of this now.
-    return BookingOut.model_validate(booking)
+    out = BookingOut.model_validate(booking)
+    out.patient_name = booking.user.full_name if booking.user else None
+    if booking.appointment_notes:
+        out.notes = booking.appointment_notes.notes
+    return out
 
 
 @router.post("/", response_model=BookingOut, status_code=status.HTTP_201_CREATED)
@@ -61,6 +64,11 @@ def create_booking(
     slot.slot_status = SlotStatusEnum.booked
     
     db.add(new_booking)
+    db.flush() # flush to get new_booking.id
+    
+    if payload.notes:
+        db.add(AppointmentNotes(booking_id=new_booking.id, notes=payload.notes))
+        
     db.commit()
     db.refresh(new_booking)
     
@@ -138,7 +146,7 @@ def get_all_bookings(
     from_date: Optional[date] = None,
     to_date: Optional[date] = None,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_role("admin"))
+    current_user: User = Depends(require_role("admin", "doctor", "clinic"))
 ):
     """Get all bookings (Admin)."""
     query = db.query(Booking).filter(Booking.deleted_at == None)
