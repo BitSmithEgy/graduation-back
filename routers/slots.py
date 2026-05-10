@@ -75,12 +75,9 @@ def generate_slots(
     rules = db.query(DoctorAvailability).filter(
         DoctorAvailability.doctor_id == payload.doctor_id,
         DoctorAvailability.is_active == True,
-        DoctorAvailability.deleted_at == None
-    )
-    if payload.clinic_id:
-        rules = rules.filter(DoctorAvailability.clinic_id == payload.clinic_id)
-    
-    rules = rules.all()
+        DoctorAvailability.deleted_at == None,
+        DoctorAvailability.clinic_id == payload.clinic_id
+    ).all()
     
     rules_by_day = {i: [] for i in range(7)}
     for r in rules:
@@ -107,6 +104,7 @@ def generate_slots(
                     AppointmentSlot.doctor_id == payload.doctor_id,
                     AppointmentSlot.slot_date == current_date,
                     AppointmentSlot.slot_start_time == slot_start,
+                    AppointmentSlot.clinic_id == payload.clinic_id,
                     AppointmentSlot.deleted_at == None
                 ).first()
                 

@@ -1,7 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, Response, Request
+from fastapi import APIRouter, Depends, HTTPException, Response, Request, Query
 from sqlalchemy.orm import Session
 from database import get_db
-from models import User, UserProfile, Clinic, Doctor, RoleEnum, Role, UserRole
+from models import User, UserProfile, Clinic, Doctor, RoleEnum, Role, UserRole, DoctorClinic
 from schemas import (
     UserRegister, ClinicRegister, DoctorRegister,
     UserWithProfileOut, UserWithClinicOut, UserWithDoctorOut,
@@ -122,12 +122,33 @@ def register_doctor(payload: DoctorRegister, db: Session = Depends(get_db)):
     return UserWithDoctorOut.model_validate(user)
 
 @router.get("/me/doctor", response_model=DoctorOut)
-def get_my_doctor(current_user: User = Depends(get_current_user)):
-    if current_user.role != RoleEnum.doctor:
-        raise HTTPException(status_code=403, detail="Only doctor accounts have doctor details")
-    if not current_user.doctor_account:
-        raise HTTPException(status_code=404, detail="Doctor profile not found")
-    return current_user.doctor_account
+def get_my_doctor(
+    doctor_id: str = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if current_user.role == RoleEnum.doctor:
+        if not current_user.doctor_account:
+            raise HTTPException(status_code=404, detail="Doctor profile not found")
+        return current_user.doctor_account
+    
+    if current_user.role == RoleEnum.clinic:
+        if doctor_id:
+            doctor = db.query(Doctor).join(DoctorClinic).filter(
+                Doctor.id == doctor_id,
+                DoctorClinic.clinic_id == current_user.clinic_account.id,
+                DoctorClinic.is_active == True
+            ).first()
+            if not doctor:
+                raise HTTPException(status_code=404, detail="Doctor not found or not linked to this clinic")
+            return doctor
+        
+        if current_user.doctor_account:
+            return current_user.doctor_account
+        
+        raise HTTPException(status_code=400, detail="doctor_id is required for clinic accounts without a direct doctor profile")
+
+    raise HTTPException(status_code=403, detail="Only doctor or clinic accounts can access doctor details")
 
 
 @router.patch("/me/doctor", response_model=DoctorOut)
@@ -162,8 +183,7 @@ def login(payload: UserLogin, response: Response, db: Session = Depends(get_db))
         raise HTTPException(status_code=403, detail="Account has been deleted")
 
     token = create_access_token(
-        data={"user_id": user.uuid, "role": user.role.value},
-        expires_delta=timedelta(minutes=30),
+        data={"user_id": user.uuid, "role": user.role.value}
     )
     response.set_cookie(key="access_token", value=token, httponly=True, samesite="lax")
 

@@ -5,7 +5,7 @@ from typing import List, Optional
 from datetime import date, datetime
 
 from database import get_db
-from models import User, Doctor, DoctorAvailability, AppointmentSlot, Booking, SlotStatusEnum, BookingStatusEnum, RoleEnum, AppointmentNotes
+from models import User, Doctor, DoctorAvailability, AppointmentSlot, Booking, SlotStatusEnum, BookingStatusEnum, RoleEnum, AppointmentNotes, Clinic
 from schemas import BookingCreate, BookingReschedule, BookingStatusUpdate, BookingOut
 from utils import require_role, get_current_user
 
@@ -157,6 +157,44 @@ def get_all_bookings(
         query = query.filter(Booking.clinic_id == clinic_id)
     if doctor_id:
         query = query.filter(Booking.doctor_id == doctor_id)
+    if booking_status:
+        query = query.filter(Booking.booking_status == booking_status)
+    if from_date:
+        query = query.join(AppointmentSlot).filter(AppointmentSlot.slot_date >= from_date)
+    if to_date:
+        query = query.join(AppointmentSlot).filter(AppointmentSlot.slot_date <= to_date)
+        
+    bookings = query.all()
+    return [enrich_booking_for_output(b) for b in bookings]
+
+
+@router.get("/clinic/{clinic_id}", response_model=List[BookingOut])
+def get_clinic_bookings(
+    clinic_id: str,
+    booking_status: Optional[BookingStatusEnum] = None,
+    from_date: Optional[date] = None,
+    to_date: Optional[date] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("admin", "clinic"))
+):
+    """Get all bookings for a specific clinic."""
+    # 1. Authorization check
+    if current_user.role == RoleEnum.clinic:
+        print(f"clinic_id: {clinic_id}")
+        print(f"user_clinic_id: {current_user.clinic_account.id}")
+        if not current_user.clinic_account or current_user.clinic_account.id != clinic_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, 
+                detail="You are not authorized to view bookings for another clinic"
+            )
+
+    # 2. Query bookings
+    query = db.query(Booking).filter(
+        Booking.clinic_id == clinic_id,
+        Booking.deleted_at == None
+    )
+    
+    # 3. Apply filters
     if booking_status:
         query = query.filter(Booking.booking_status == booking_status)
     if from_date:

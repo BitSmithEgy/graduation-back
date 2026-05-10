@@ -437,7 +437,7 @@ def export_user_pdf(
     db: Session = Depends(get_db),
 ):
     # ── authorisation ──────────────────────────
-    if current_user.role == RoleEnum.doctor:
+    if current_user.role == RoleEnum.doctor or current_user.role == RoleEnum.clinic:
         # TODO: verify an active booking exists between doctor and patient
         pass
     elif current_user.role != RoleEnum.admin:

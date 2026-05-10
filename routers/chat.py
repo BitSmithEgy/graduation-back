@@ -1,13 +1,18 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from typing import List
-
+from typing import List, Dict
 from database import get_db
 from models import User, ChatSession, ChatMessage, SymptomTag
 from schemas import ChatSessionOut, ChatSessionCreate
 from utils import get_current_user
+from pydantic import BaseModel
+import requests
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+
+class ChatRequest(BaseModel):
+    message: str
+    chat_id: str
 
 @router.post("/sessions", response_model=ChatSessionOut, status_code=201)
 def create_chat_session(
@@ -73,3 +78,31 @@ def add_message_to_session(
     db.commit()
     db.refresh(message)
     return message
+
+@router.post("/agent", response_model=Dict[str, str])
+def chat_agent(
+    data: ChatRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    url = "https://joelolo.app.n8n.cloud/webhook/f91bbaec-770a-4977-a774-85a1efd864dd"
+    
+    payload = {
+        "message": data.message,
+        "chat_id": data.chat_id
+    }
+    
+    try:
+        response = requests.post(url, json=payload)
+        external = response.json()
+        
+        return {
+            "status": "sent",
+            "response": external.get("Response", "")
+        }
+    
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }

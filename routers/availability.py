@@ -5,7 +5,7 @@ from typing import List, Optional
 import datetime
 
 from database import get_db
-from models import User, Doctor, DoctorAvailability, SlotStatusEnum
+from models import User, Doctor, DoctorAvailability, AppointmentSlot, SlotStatusEnum
 from schemas import AvailabilityCreate, AvailabilityUpdate, AvailabilityOut
 from utils import require_role, get_current_user
 
@@ -108,13 +108,22 @@ def delete_availability(
     """Delete an availability rule."""
     rule = db.query(DoctorAvailability).filter(
         DoctorAvailability.id == avail_id,
-        DoctorAvailability.doctor_id == doctor_id
+        DoctorAvailability.doctor_id == doctor_id,
+        DoctorAvailability.deleted_at == None
     ).first()
     
     if not rule:
         raise HTTPException(status_code=404, detail="Availability rule not found")
         
-    db.delete(rule) 
+    # Soft delete the rule
+    rule.deleted_at = func.now()
+    
+    # Also soft delete related slots to prevent them from being used/seen
+    db.query(AppointmentSlot).filter(
+        AppointmentSlot.availability_id == avail_id,
+        AppointmentSlot.deleted_at == None
+    ).update({"deleted_at": func.now()}, synchronize_session=False)
+    
     db.commit()
     return {"message": "Availability rule deleted"}
 
